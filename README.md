@@ -31,13 +31,12 @@ To run this tool via the command line without relying on any IDEs like IntelliJ 
 
 Due to the multi-module structure of `unidbg`, you must **strictly place the files according to the following directory structure**, otherwise, it will result in class or library file not found errors when running via the command line:
 
-1. **Place Native Libraries and APK**
+1. **Place Native Library**
    Create a folder named `libs` in the **root directory** of the unidbg project and place the relevant files obtained from the phone into it:
    ~~~text
    unidbg-master/
    ├── libs/
-   │   ├── libvivoseckey_n4.so    # Library
-   │   └── Updater.apk            # Official system update APK (used to extract official certificate info)
+   │   └── libvivoseckey_n4.so    # Library
    ~~~
 
 2. **Place Java Source Code**
