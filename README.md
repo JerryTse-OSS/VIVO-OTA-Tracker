@@ -1,5 +1,7 @@
 # Vivo OTA Tracker
 
+[中文文档](README.zh-CN.md)
+
 Vivo OTA Tracker is an open-source tool built on top of the [unidbg](https://github.com/zhkl0228/unidbg) framework. It is designed to fetch official OTA firmware download links(Currently China Only) for various Vivo devices directly from your computer.
 
 By loading specific dynamic libraries locally, this tool processes the necessary request parameters for system updates, allowing you to obtain full or incremental firmware download links without needing a physical phone environment.
