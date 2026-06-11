@@ -10,6 +10,7 @@ By loading specific dynamic libraries locally, this tool processes the necessary
 * 📦 **Firmware Fetching**: Construct device parameters on your PC to request and extract firmware download direct links for various models from official servers.
 * ⚙️ **Automated Processing**: Automatically handles parameter conversions and data encapsulation required for fetching firmware.
 * 📱 **Multi-Device Support**: Supports custom device models, system versions, and other parameters to flexibly fetch firmware for different devices.
+* 🧩 **Recovery Package Support**: Supports optional full-package / recovery OTA parameters for tablets such as vivo Pad.
 
 ---
 
@@ -55,19 +56,27 @@ Due to the multi-module structure of `unidbg`, you must **strictly place the fil
 
 ---
 
-### ⚙️ Modify Device Configuration
+### ⚙️ Device Configuration
 
-Before running, open the `VivoOtaTracker.java` file with any text editor (like Notepad, VS Code), scroll to the `main` method at the bottom of the file, and modify the target device parameters you want to query:
+The tracker reads device parameters from Java system properties, so you can query different devices without editing the source code. If a property is omitted, the default phone example is used.
 
-~~~java
-// ==================== User Configuration Area ====================
-final String DEVICE_TYPE = "phone";     // Device type: "tablet" or "phone"
-final String MODEL_SW_VER = "PD2502";   // Internal model code (e.g., PD2314, DPD2429)
-final String DEVICE_MODEL = "V2502A";   // Public marketing model (e.g., V2314A, PA2573)
-final String SW_VERSION = "16.0.14.7.W10"; // Your base system version (server provides packages >= this version)
-final int ANDROID_VER = 16;             // FuntouchOS / OriginOS major version (13=OS3, 14=OS4, 15=OS5)
-// =================================================================
-~~~
+| Property | Description | Example |
+|----------|-------------|---------|
+| `DEVICE_TYPE` | Device type. Use `phone` or `tablet`. | `tablet` |
+| `MODEL_SW_VER` | Internal project code / software model. | `DPD2106` |
+| `DEVICE_MODEL` | Public model / network access model. | `PA2170` |
+| `SW_VERSION` | Current base system version. | `8.7.22` |
+| `ANDROID_VER` | Android / OriginOS major version used in tablet request parameters. | `14` |
+| `IS_FULL` | Override the full-package flag. Defaults to `true` for phones and `false` for tablets. | `true` |
+| `OTA_TYPE` | Optional OTA type, commonly `RECOVERY` or `AB`. | `RECOVERY` |
+| `ALWAYS_FAILED_VERSION` | Optional failed-version marker used by vivo recovery retry logic. | `DPD2106_N_DPD2106MA_8.7.22` |
+| `SNP` | Tablet serial number used in Pad request parameters. | `400C5R007A00000` |
+| `OEM_PROJECTS` | OEM project list reported by the device. | `DPD2106 DPD2106B` |
+| `VERBOSE` | Print raw update / redir responses for debugging. | `true` |
+
+Advanced overrides are also available when a device does not follow the default `MODEL_A_VERSION` / `MODEL_N_HW_VERSION` pattern: `HW_VER`, `FULL_VER`, `VERSION`, `SW_VER`, `APP_VER_NAME`, and `APP_VER_CODE`.
+
+For phones, the tracker appends `.V000L1` to `SW_VERSION` when it is missing. For tablets / recovery packages, `SW_VERSION` is sent exactly as provided because some vivo Pad requests use the bare version string.
 
 You may check the SW_MODEL and DEVICE_MODEL from [here](https://khwang9883.github.io/MobileModels/brands/vivo_cn.html)
 
@@ -90,7 +99,7 @@ Since unidbg is a multi-module project, you must first install the base librarie
 *(Note: This step only needs to be executed once the first time you use this tool, or when the unidbg framework source code changes. If you see `BUILD SUCCESS`, it means it's successful)*
 
 #### Step 2: Run the Firmware Fetcher Tool
-Use `-pl unidbg-android` to specify running the submodule, and execute our main program:
+Use `-pl unidbg-android` to specify running the submodule, and execute the main program:
 * **Windows:**
   ~~~cmd
   mvnw.cmd exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker"
@@ -99,6 +108,35 @@ Use `-pl unidbg-android` to specify running the submodule, and execute our main 
   ~~~bash
   ./mvnw exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker"
   ~~~
+
+Example: query a vivo Pad recovery update package:
+
+* **Windows:**
+  ~~~cmd
+  mvnw.cmd exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker" ^
+    -DDEVICE_TYPE=tablet ^
+    -DMODEL_SW_VER=DPD2106 ^
+    -DDEVICE_MODEL=PA2170 ^
+    -DSW_VERSION=8.7.22 ^
+    -DANDROID_VER=14 ^
+    -DIS_FULL=false ^
+    -DSNP=400C5R007A00000 ^
+    -DVERBOSE=true
+  ~~~
+* **Linux / macOS:**
+  ~~~bash
+  ./mvnw exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker" \
+    -DDEVICE_TYPE=tablet \
+    -DMODEL_SW_VER=DPD2106 \
+    -DDEVICE_MODEL=PA2170 \
+    -DSW_VERSION=8.7.22 \
+    -DANDROID_VER=14 \
+    -DIS_FULL=false \
+    -DSNP=400C5R007A00000 \
+    -DVERBOSE=true
+  ~~~
+
+For DPD2106 `8.7.22 -> 8.7.30`, keep `IS_FULL=false` and leave `OTA_TYPE` empty. Forcing `OTA_TYPE=RECOVERY` or `IS_FULL=true` can make the server return `retcode=210`.
 
 If the parameters are set correctly and the network is clear, the console will output the device initialization information, the version and size information of the update package, and automatically print out the **final firmware `.zip` download direct link**.
 
@@ -133,8 +171,9 @@ When compiling and running from the command line, limited by the differences in 
 * **Cause**: The firmware information cannot be obtained due to server-side business verification interception. Common causes:
   1. The `SW_VERSION` (base version number) you entered is not in the official open upgrade roadmap.
   2. The push quota for this model/version is full, or the official has temporarily taken down the package.
-  3. Requests are too frequent and temporarily restricted.
-* **Solution**: Modify the configuration area code to test other models; or check forums/tieba to confirm the exact system version number that can currently receive updates for this model, and retry after filling it in the code.
+  3. Recovery packages may require `IS_FULL=true`, `OTA_TYPE=RECOVERY`, or a matching `ALWAYS_FAILED_VERSION`.
+  4. Requests are too frequent and temporarily restricted.
+* **Solution**: Adjust the Java system properties to test other models or versions; or check forums/tieba to confirm the exact system version number that can currently receive updates for this model.
 
 ---
 

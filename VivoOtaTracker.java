@@ -7,14 +7,12 @@ import com.github.unidbg.linux.android.dvm.*;
 import com.github.unidbg.linux.android.dvm.array.ArrayObject;
 import com.github.unidbg.linux.android.dvm.array.ByteArray;
 import com.github.unidbg.memory.Memory;
-import net.dongliu.apk.parser.ApkFile;
-import net.dongliu.apk.parser.bean.ApkSigner;
-import net.dongliu.apk.parser.bean.CertificateMeta;
 
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -40,7 +38,7 @@ public class VivoOtaTracker extends AbstractJni {
     private DalvikModule dm;
 
     static final String TOKEN_NATIVE = "jnisgmain_v2@com.bbk.updater";
-    
+
     private static final String HARDCODED_CERT_BASE64 =
         "MIIEpTCCA42gAwIBAgIJALFTcw2KNSU5MA0GCSqGSIb3DQEBBQUAMIGTMQswCQYD" +
         "VQQGEwJDTjESMBAGA1UECBMJR3Vhbmdkb25nMRYwFAYDVQQHEw1Eb25nZ3VhbiBW" +
@@ -74,7 +72,7 @@ public class VivoOtaTracker extends AbstractJni {
 
     @Override
     public DvmObject<?> callStaticObjectMethodV(BaseVM vm, DvmClass dvmClass, String signature, VaList vaList) {
-        if (signature.contains("SDKCipherNative->cCert"))
+        if (signature.contains("SDKCipherNative->cCert") || signature.contains("SDKCipherNative->collectCert"))
             return new ArrayObject(vm.resolveClass("android/content/pm/Signature").newObject("official_cert"));
         if (signature.contains("Base64->encode")) {
             byte[] src = (byte[]) vaList.getObjectArg(0).getValue();
@@ -101,6 +99,10 @@ public class VivoOtaTracker extends AbstractJni {
         if (signature.contains("getPackageName")) return new StringObject(vm, "com.bbk.updater");
         if (signature.contains("getPackageCodePath"))
             return new StringObject(vm, "/data/app/com.bbk.updater-1/base.apk");
+        if (signature.contains("getPackageManager"))
+            return vm.resolveClass("android/content/pm/PackageManager").newObject(null);
+        if (signature.contains("PackageManager->getPackageInfo"))
+            return vm.resolveClass("android/content/pm/PackageInfo").newObject(null);
         if (signature.contains("getSystemService"))
             return vm.resolveClass("android/os/PowerManager").newObject(null);
 
@@ -122,6 +124,13 @@ public class VivoOtaTracker extends AbstractJni {
             return new ByteArray(vm, new byte[0]);
         }
         return super.callObjectMethodV(vm, dvmObject, signature, vaList);
+    }
+
+    @Override
+    public DvmObject<?> getObjectField(BaseVM vm, DvmObject<?> dvmObject, String signature) {
+        if (signature.contains("PackageInfo->signatures"))
+            return new ArrayObject(vm.resolveClass("android/content/pm/Signature").newObject("official_cert"));
+        return super.getObjectField(vm, dvmObject, signature);
     }
 
     @Override
@@ -180,6 +189,7 @@ public class VivoOtaTracker extends AbstractJni {
         emulator = AndroidEmulatorBuilder.for64Bit().setProcessName("com.bbk.updater").build();
         Memory memory = emulator.getMemory();
         memory.setLibraryResolver(new AndroidResolver(23));
+        vm = emulator.createDalvikVM();
 
         try {
             byte[] certData = java.util.Base64.getDecoder().decode(HARDCODED_CERT_BASE64.replace("\n", "").replace("\r", ""));
@@ -421,83 +431,200 @@ public class VivoOtaTracker extends AbstractJni {
     // Main Entry Point
     // ============================================================
 
+    private static String encode(Object value) throws Exception {
+        Object safeValue = value == null ? "null" : value;
+        return URLEncoder.encode(String.valueOf(safeValue), "UTF-8");
+    }
+
+    private static String joinParams(Map<String, Object> params) throws Exception {
+        StringBuilder out = new StringBuilder();
+        for (Map.Entry<String, Object> entry : params.entrySet()) {
+            if (out.length() > 0) out.append('&');
+            out.append(entry.getKey()).append('=').append(encode(entry.getValue()));
+        }
+        return out.toString();
+    }
+
+    private static String getProp(String key, String defaultValue) {
+        String value = System.getProperty(key);
+        if (value == null || value.trim().isEmpty()) return defaultValue;
+        return value.trim();
+    }
+
+    private static String appendV000L1(String version) {
+        return version.contains(".V") ? version : version + ".V000L1";
+    }
+
+    private static String normalizeJsonUrl(String value) {
+        return value == null ? null : value.replace("\\/", "/");
+    }
+
     public static void main(String[] args) throws Exception {
         System.out.println("==============================================");
         System.out.println("  Vivo OTA Tracker");
         System.out.println("==============================================");
 
-        // --- Configuration ---
-
-        // Device type: "tablet" or "phone"
-        final String DEVICE_TYPE = "phone";
-
-        // Software version number and device model (e.g., DPD2429, PD2314)
-        final String MODEL_SW_VER = "PD2408";
-
-        // Device model (e.g., PA2573, V2314A)
-        final String DEVICE_MODEL = "V2408A";
-
-        // Software version (e.g., 15.0.12.18.W10, 15.2.13.1.W10)
-        // Note: The version number must not be lower than the current lowest version, otherwise the server will reject the request
-        final String SW_VERSION = "16.1.16.5.W10";
-
-        // FuntouchOS major version number
-        // Correspondence: 13=OriginOS3, 14=OriginOS4, 15=OriginOS5
-        final int ANDROID_VER = 16;
-        // ---------------------
-
-        final String FULL_VER = MODEL_SW_VER + "_A_" + SW_VERSION + ".V000L1";
-        final String VERSION_LONG = MODEL_SW_VER + "_N_" + MODEL_SW_VER + "MA_" + SW_VERSION + ".V000L1";
-        final String HW_VER = MODEL_SW_VER + "MA";
+        String DEVICE_TYPE = getProp("DEVICE_TYPE", "phone").toLowerCase(Locale.ROOT);
+        String MODEL_SW_VER = getProp("MODEL_SW_VER", "PD2408");
+        String DEVICE_MODEL = getProp("DEVICE_MODEL", "V2408A");
+        String SW_VERSION = getProp("SW_VERSION", "16.1.16.5.W10");
+        int ANDROID_VER = Integer.parseInt(getProp("ANDROID_VER", "16"));
+        String otaType = getProp("OTA_TYPE", ""); // RECOVERY or AB. Leave blank for server default.
+        String alwaysFailedVersion = getProp("ALWAYS_FAILED_VERSION", ""); // Helps retry Recovery full packages.
+        boolean verbose = Boolean.parseBoolean(getProp("VERBOSE", "false"));
 
         boolean isPhone = "phone".equals(DEVICE_TYPE);
-        VivoOtaTracker tracker = new VivoOtaTracker();
+        boolean isFull = Boolean.parseBoolean(getProp("IS_FULL", isPhone ? "true" : "false"));
+        final String requestVersion = isPhone ? appendV000L1(SW_VERSION) : SW_VERSION;
+        final String HW_VER = getProp("HW_VER", MODEL_SW_VER + "MA");
+        final String FULL_VER = getProp("FULL_VER", MODEL_SW_VER + "_A_" + requestVersion);
+        final String VERSION_LONG = getProp("VERSION", MODEL_SW_VER + "_N_" + HW_VER + "_" + requestVersion);
+        final String SW_VER_PARAM = getProp("SW_VER", requestVersion);
+        final String APP_VER_NAME = getProp("APP_VER_NAME", isPhone ? "1.1.1.1" : "4.9.13.6");
+        final String APP_VER_CODE = getProp("APP_VER_CODE", isPhone ? "000000001" : "904091306");
+        final String SNP = getProp("SNP", "A0000000000000A");
+        final String OEM_PROJECTS = getProp("OEM_PROJECTS", MODEL_SW_VER + " " + MODEL_SW_VER + "B");
 
         String ts = new SimpleDateFormat("yy_MM_dd-HH_mm_ss").format(new Date());
         int elapsedtime = isPhone ? 140000 + new Random().nextInt(80000) : 2000000 + new Random().nextInt(500000);
 
-        String rawParams;
+        LinkedHashMap<String, Object> p = new LinkedHashMap<>();
         if (isPhone) {
-            rawParams = "vgcNewActiveVer=&nt=WIFI&vgcSwVer=1.1.1&vgcCu=V000&fullVer=" + FULL_VER + "&sf=1&emmcid=&si=null&sm1=null&dType=phone&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&s_n=null&ch=N&gn=0&newActiveVer=&elapsedtime=" + elapsedtime + "&version=" + VERSION_LONG + "&st2=0&st1=" + (100000 + new Random().nextInt(60000)) + "&cu=N&srm2=0&srm1=0&cy=CN-ZH&sn2=null&ne=null&sn1=null&imei=000000000000000&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + ".V000L1&language=zh_CN&ms=0&mtype=no&radiotype=L&isMan=1&isFull=1&protocalversion=1.0&checkTrige=MANUL&isstlifeover=false&hwFingerprint=";
+            p.put("vgcNewActiveVer", "");
+            p.put("nt", "WIFI");
+            p.put("vgcSwVer", "1.1.1");
+            p.put("vgcCu", "V000");
+            p.put("fullVer", FULL_VER);
+            p.put("sf", 1);
+            p.put("emmcid", "");
+            p.put("si", "null");
+            p.put("sm1", "null");
+            p.put("dType", "phone");
+            p.put("sm2", "null");
+            p.put("model", MODEL_SW_VER);
+            p.put("hasVgc", 1);
+            p.put("vgcNewPassiveVer", "");
+            p.put("s_n", "null");
+            p.put("ch", "N");
+            p.put("gn", 0);
+            p.put("newActiveVer", "");
+            p.put("elapsedtime", elapsedtime);
+            p.put("version", VERSION_LONG);
+            p.put("st2", 0);
+            p.put("st1", 100000 + new Random().nextInt(60000));
+            p.put("cu", "N");
+            p.put("srm2", 0);
+            p.put("srm1", 0);
+            p.put("cy", "CN-ZH");
+            p.put("sn2", "null");
+            p.put("ne", "null");
+            p.put("sn1", "null");
+            p.put("imei", "000000000000000");
+            p.put("public_model", DEVICE_MODEL);
+            p.put("newPassiveVer", "");
+            p.put("hwVer", HW_VER);
+            p.put("swVer", SW_VER_PARAM);
+            p.put("language", "zh_CN");
+            p.put("ms", 0);
+            p.put("mtype", "no");
+            p.put("radiotype", "L");
+            p.put("isMan", 1);
+            p.put("isFull", isFull ? 1 : 0);
+            p.put("protocalversion", "1.0");
+            p.put("checkTrige", "MANUL");
+            p.put("isstlifeover", "false");
+            p.put("hwFingerprint", "");
+            if (!otaType.isEmpty()) p.put("otaType", otaType.toUpperCase(Locale.ROOT));
         } else {
-            rawParams = "vgcNewActiveVer=&romVersion=Funtouch+" + ANDROID_VER + ".0&nt=WIFI&occurTime=" + ts + "&vgcSwVer=1.0.1&vgcCu=V000&battery=69&fullVer=" + FULL_VER + "&sf=0&emmcid=&si=&oem=" + MODEL_SW_VER + "_CN-ZH_FULL_SC_NULL&sm1=null&dType=tablet&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&ch=N&gn=0&oemProjects=" + String.join("+", MODEL_SW_VER, MODEL_SW_VER + "B", MODEL_SW_VER + "C", MODEL_SW_VER + "D", MODEL_SW_VER + "E", MODEL_SW_VER + "F", MODEL_SW_VER + "G", MODEL_SW_VER + "H") + "&newActiveVer=&verName=1.1.1.1&elapsedtime=" + elapsedtime + "&version=" + VERSION_LONG + "&verCode=000000001&st2=0&st1=0&cu=N&srm2=0&snp=A0000000000000A&srm1=0&cy=CN-ZH&sn2=null&ne=&sn1=null&imei=&sdkVersion=34&isCharge=false&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + ".V000L1&language=zh_CN&ms=-1&mtype=FULL_SC&radiotype=A&isMan=0&isFull=1&protocalversion=1.0&checkTrige=BOOT&isstlifeover=false&hwFingerprint=";
+            p.put("vgcNewActiveVer", "");
+            p.put("romVersion", "Funtouch " + ANDROID_VER + ".0");
+            p.put("nt", "WIFI");
+            p.put("occurTime", ts);
+            p.put("vgcSwVer", "1.0.0");
+            p.put("vgcCu", "NULL");
+            p.put("battery", 69);
+            p.put("fullVer", FULL_VER);
+            p.put("sf", 0);
+            p.put("emmcid", "");
+            p.put("si", "");
+            p.put("oem", MODEL_SW_VER + "_CN-ZH_FULL_SC_NULL");
+            p.put("sm1", "null");
+            p.put("dType", "tablet");
+            p.put("sm2", "null");
+            p.put("model", MODEL_SW_VER);
+            p.put("hasVgc", 1);
+            p.put("vgcNewPassiveVer", "");
+            p.put("ch", "N");
+            p.put("gn", 0);
+            p.put("oemProjects", OEM_PROJECTS);
+            p.put("newActiveVer", "");
+            p.put("verName", APP_VER_NAME);
+            p.put("elapsedtime", elapsedtime);
+            p.put("version", VERSION_LONG);
+            p.put("verCode", APP_VER_CODE);
+            p.put("st2", 0);
+            p.put("st1", 0);
+            p.put("cu", "N");
+            p.put("srm2", 0);
+            p.put("snp", SNP);
+            p.put("srm1", 0);
+            p.put("cy", "CN-ZH");
+            p.put("sn2", "null");
+            p.put("ne", "");
+            p.put("sn1", "null");
+            p.put("imei", "");
+            p.put("sdkVersion", 34);
+            p.put("isCharge", "false");
+            p.put("public_model", DEVICE_MODEL);
+            p.put("newPassiveVer", "");
+            p.put("hwVer", HW_VER);
+            p.put("swVer", SW_VER_PARAM);
+            p.put("language", "zh_CN");
+            p.put("ms", -1);
+            p.put("mtype", "FULL_SC");
+            p.put("radiotype", "A");
+            p.put("isMan", 1);
+            p.put("isFull", isFull ? 1 : 0);
+            p.put("protocalversion", "1.0");
+            p.put("checkTrige", "MANUL");
+            p.put("isstlifeover", "false");
+            p.put("hwFingerprint", "");
+            if (!otaType.isEmpty()) p.put("otaType", otaType.toUpperCase(Locale.ROOT));
+            if (!alwaysFailedVersion.isEmpty()) p.put("alwaysFailedVersion", alwaysFailedVersion);
         }
+
+        String rawParams = joinParams(p);
 
         System.out.println("  Device: " + DEVICE_TYPE + " | " + DEVICE_MODEL + " / " + MODEL_SW_VER);
         System.out.println("  Base Version: " + SW_VERSION);
+        if (verbose) System.out.println("  Raw Request Params: " + rawParams);
 
-        String result = tracker.sendFreshEncryptedRequest(rawParams);
-        printDownloadInfo(result);
+        VivoOtaTracker tracker = new VivoOtaTracker();
+        try {
+            String result = tracker.sendFreshEncryptedRequest(rawParams);
+            if (verbose) System.out.println("  Raw Update Response: " + result);
+            printDownloadInfo(result);
 
-        String pkUrl = tracker.extractPkUrl(result);
-        if (pkUrl != null) {
-            try {
-                String pkNameValue = "";
-                int nameStart = pkUrl.indexOf("name=");
-                if (nameStart >= 0) {
-                    pkNameValue = pkUrl.substring(nameStart + 5);
-                    int ampIdx = pkNameValue.indexOf('&');
-                    if (ampIdx > 0) pkNameValue = pkNameValue.substring(0, ampIdx);
+            String pkUrl = tracker.extractPkUrl(result);
+            if (pkUrl != null) {
+                try {
+                    if (verbose) System.out.println("  Patch URL: " + normalizeJsonUrl(pkUrl));
+                    int queryStart = pkUrl.indexOf("?");
+                    String redirParams = queryStart >= 0 ? pkUrl.substring(queryStart + 1) : pkUrl;
+                    String redirRes = tracker.requestRedirPost(redirParams);
+                    if (verbose) System.out.println("  Raw Redir Response: " + redirRes);
+                    if (redirRes != null && redirRes.contains("\"data\":\"")) {
+                        String finalUrl = redirRes.substring(redirRes.indexOf("\"data\":\"") + 8, redirRes.indexOf("\"", redirRes.indexOf("\"data\":\"") + 8));
+                        System.out.println("  Download URL: " + normalizeJsonUrl(finalUrl));
+                    } else {
+                        System.out.println("  [!] Could not parse Download URL from Redir response: " + redirRes);
+                    }
+                } catch (Exception e) {
+                    System.out.println("  [!] redirPost.do request failed: " + e.getMessage());
                 }
-
-                String newTs = new SimpleDateFormat("yy_MM_dd-HH_mm_ss").format(new Date());
-                String nonce = UUID.randomUUID().toString().replace("-", "");
-                long timestamp = System.currentTimeMillis();
-                int newElapsed = isPhone ? 140000 + new Random().nextInt(80000) : 2000000 + new Random().nextInt(500000);
-                int timeToUptouch = isPhone ? 900000 + new Random().nextInt(100000) : 1700000 + new Random().nextInt(100000);
-
-                String redirPlaintext;
-                if (isPhone) {
-                    redirPlaintext = "vgcNewActiveVer=&nt=WIFI&vgcSwVer=1.1.1&vgcCu=V000&fullVer=" + FULL_VER + "&sf=1&emmcid=&si=null&sm1=null&dType=phone&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&s_n=null&ch=N&gn=0&newActiveVer=&elapsedtime=" + newElapsed + "&version=" + VERSION_LONG + "&st2=0&st1=" + (100000 + new Random().nextInt(60000)) + "&cu=N&srm2=0&srm1=0&cy=CN-ZH&sn2=null&ne=null&sn1=null&imei=null&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + ".V000L1&language=zh_CN&ms=0&mtype=no&radiotype=L&name=" + pkNameValue + "&fileType=relative&fileLength=" + extractJsonStr(result, "pkLen\":\"") + "&packageType=patch&upversion=&dlrequest=0&downloadType=NORMAL_MANUAL_DOWNLOAD&isPacakgeActive=1&timeToUptouch=" + timeToUptouch + "&httpsSupport=1&isTrialVersion=false&retry=0&timeStamp=" + timestamp + "&nonce=" + nonce + "&hwFingerprint=";
-                } else {
-                    redirPlaintext = "vgcNewActiveVer=&romVersion=Funtouch+" + ANDROID_VER + ".0&nt=WIFI&occurTime=" + newTs + "&vgcSwVer=1.0.1&vgcCu=V000&battery=69&fullVer=" + FULL_VER + "&sf=0&emmcid=&si=&oem=" + MODEL_SW_VER + "_CN-ZH_FULL_SC_NULL&sm1=null&dType=tablet&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&ch=N&gn=0&oemProjects=" + String.join("+", MODEL_SW_VER, MODEL_SW_VER + "B", MODEL_SW_VER + "C", MODEL_SW_VER + "D", MODEL_SW_VER + "E", MODEL_SW_VER + "F", MODEL_SW_VER + "G", MODEL_SW_VER + "H") + "&newActiveVer=&verName1.1.1.1&elapsedtime=" + newElapsed + "&version=" + VERSION_LONG + "&verCode=000000001&st2=0&st1=0&cu=N&srm2=0&snp=A0000000000000A&srm1=0&cy=CN-ZH&sn2=null&ne=&sn1=null&imei=&sdkVersion=34&isCharge=false&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + ".V000L1&language=zh_CN&ms=-1&mtype=FULL_SC&radiotype=A&name=" + pkNameValue + "&fileType=relative&fileLength=" + extractJsonStr(result, "pkLen\":\"") + "&packageType=patch&upversion=&dlrequest=0&downloadType=NORMAL_MANUAL_DOWNLOAD&isPacakgeActive=1&timeToUptouch=" + timeToUptouch + "&httpsSupport=1&isTrialVersion=false&retry=0&timeStamp=" + timestamp + "&nonce=" + nonce + "&hwFingerprint=";
-                }
-                String redirResult = tracker.requestRedirPost(redirPlaintext);
-                System.out.println("  Download URL: " + extractJsonStr(redirResult, "data\":\""));
-            } catch (Exception e) {
-                System.out.println("  [!] redirPost.do request failed.");
             }
+        } finally {
+            tracker.destroy();
         }
-        tracker.destroy();
     }
 }
