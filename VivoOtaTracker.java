@@ -586,6 +586,7 @@ public class VivoOtaTracker extends AbstractJni {
                 if (redirRes != null && redirRes.contains("\"data\":\"")) {
                     String finalUrl = redirRes.substring(redirRes.indexOf("\"data\":\"") + 8, redirRes.indexOf("\"", redirRes.indexOf("\"data\":\"") + 8));
                     System.out.println("  Download URL: " + normalizeJsonUrl(finalUrl));
+                    System.out.println("  ChangeLog URL: " + extractJsonStr(result, "h5Url\":\""));
                 } else {
                     System.out.println("  [!] Could not parse Download URL from Redir response: " + redirRes);
                 }
