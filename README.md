@@ -55,19 +55,23 @@ Due to the multi-module structure of `unidbg`, you must **strictly place the fil
 
 ---
 
-### ⚙️ Modify Device Configuration
+### ⚙️ Device Configuration
 
-Before running, open the `VivoOtaTracker.java` file with any text editor (like Notepad, VS Code), scroll to the `main` method at the bottom of the file, and modify the target device parameters you want to query:
+The tracker reads device parameters from Java system properties, so you can query different devices without editing the source code. If a property is omitted, the default config in source code is used.
 
-~~~java
-// ==================== User Configuration Area ====================
-final String DEVICE_TYPE = "phone";     // Device type: "tablet" or "phone"
-final String MODEL_SW_VER = "PD2502";   // Internal model code (e.g., PD2314, DPD2429)
-final String DEVICE_MODEL = "V2502A";   // Public marketing model (e.g., V2314A, PA2573)
-final String SW_VERSION = "16.0.14.7.W10"; // Your base system version (server provides packages >= this version)
-final int ANDROID_VER = 16;             // FuntouchOS / OriginOS major version (13=OS3, 14=OS4, 15=OS5)
-// =================================================================
-~~~
+
+| Property | Description | Example |
+|----------|-------------|---------|
+| `DEVICE_TYPE` | Device type. Use `phone` or `tablet`. | `phone` |
+| `MODEL_SW_VER` | Internal project code / software model. | `PD2408` |
+| `DEVICE_MODEL` | Public model / network access model. | `V2408A` |
+| `SW_VERSION` | Current base system version. | `16.1.16.5.W10` |
+| `ANDROID_VER` | Android / OriginOS major version used in tablet request parameters. | `16` |
+| `IS_FULL` | Override the full-package flag. Defaults to `true` for phones and `false` for tablets. | `true` |
+| `SNP` | Serial number used in request parameters. | `A0000000000000A` |
+| `VERBOSE` | Print raw update / redir responses for debugging. | `true` |
+
+Advanced overrides are also available when a device does not follow the default `MODEL_A_VERSION` / `MODEL_N_HW_VERSION` pattern: `HW_VER`, `FULL_VER`, `VERSION`, `SW_VER`, `APP_VER_NAME`, and `APP_VER_CODE`.
 
 You may check the SW_MODEL and DEVICE_MODEL from [here](https://khwang9883.github.io/MobileModels/brands/vivo_cn.html)
 
@@ -90,7 +94,7 @@ Since unidbg is a multi-module project, you must first install the base librarie
 *(Note: This step only needs to be executed once the first time you use this tool, or when the unidbg framework source code changes. If you see `BUILD SUCCESS`, it means it's successful)*
 
 #### Step 2: Run the Firmware Fetcher Tool
-Use `-pl unidbg-android` to specify running the submodule, and execute our main program:
+Use `-pl unidbg-android` to specify running the submodule, and execute the main program with using defualt configs:
 * **Windows:**
   ~~~cmd
   mvnw.cmd exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker"
@@ -98,6 +102,31 @@ Use `-pl unidbg-android` to specify running the submodule, and execute our main 
 * **Linux / macOS:**
   ~~~bash
   ./mvnw exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker"
+  ~~~
+
+Or you may follow the example to custom the configs:
+
+* **Windows:**
+  ~~~cmd
+  mvnw.cmd exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker" ^
+    -DDEVICE_TYPE=tablet ^
+    -DMODEL_SW_VER=DPD2106 ^
+    -DDEVICE_MODEL=PA2170 ^
+    -DSW_VERSION=8.7.22 ^
+    -DANDROID_VER=14 ^
+    -DIS_FULL=false ^
+    -DVERBOSE=true
+  ~~~
+* **Linux / macOS:**
+  ~~~bash
+  ./mvnw exec:java -pl unidbg-android -Dexec.mainClass="com.vivo.ota.VivoOtaTracker" \
+    -DDEVICE_TYPE=tablet \
+    -DMODEL_SW_VER=DPD2106 \
+    -DDEVICE_MODEL=PA2170 \
+    -DSW_VERSION=8.7.22 \
+    -DANDROID_VER=14 \
+    -DIS_FULL=false \
+    -DVERBOSE=true
   ~~~
 
 If the parameters are set correctly and the network is clear, the console will output the device initialization information, the version and size information of the update package, and automatically print out the **final firmware `.zip` download direct link**.
