@@ -7,9 +7,6 @@ import com.github.unidbg.linux.android.dvm.*;
 import com.github.unidbg.linux.android.dvm.array.ArrayObject;
 import com.github.unidbg.linux.android.dvm.array.ByteArray;
 import com.github.unidbg.memory.Memory;
-import net.dongliu.apk.parser.ApkFile;
-import net.dongliu.apk.parser.bean.ApkSigner;
-import net.dongliu.apk.parser.bean.CertificateMeta;
 
 import java.io.*;
 import java.net.HttpURLConnection;
