@@ -427,6 +427,23 @@ public class VivoOtaTracker extends AbstractJni {
     }
 
     // ============================================================
+    // Params Resolving
+    // ============================================================
+
+    private static String joinParams(Map<String, Object> params) throws Exception {
+        StringBuilder out = new StringBuilder();
+        for (Map.Entry<String, Object> entry : params.entrySet()) {
+            if (out.length() > 0) out.append('&');
+            out.append(entry.getKey()).append('=').append(entry.getValue());
+        }
+        return out.toString();
+    }
+
+    private static String normalizeJsonUrl(String value) {
+        return value == null ? null : value.replace("\\/", "/");
+    }
+
+    // ============================================================
     // Main Entry Point
     // ============================================================
 
@@ -438,32 +455,34 @@ public class VivoOtaTracker extends AbstractJni {
         // --- Configuration ---
 
         // Device type: "tablet" or "phone"
-        final String DEVICE_TYPE = "phone";
+        String DEVICE_TYPE = System.getProperty("DEVICE_TYPE", "phone");
 
         // Software version number and device model (e.g., DPD2429, PD2314)
-        final String MODEL_SW_VER = "PD2408";
+        String MODEL_SW_VER = System.getProperty("MODEL_SW_VER", "PD2408");
 
         // Device model (e.g., PA2573, V2314A)
-        final String DEVICE_MODEL = "V2408A";
+        String DEVICE_MODEL = System.getProperty("DEVICE_MODEL", "V2408A");
 
         // Software version (e.g., 15.0.12.18.W10, 15.2.13.1.W10)
         // Note: The version number must not be lower than the current lowest version, otherwise the server will reject the request
-        final String SW_VERSION = "16.1.16.5.W10";
+        String SW_VERSION = System.getProperty("SW_VERSION", "16.1.16.5.W10");
 
         // FuntouchOS major version number
         // Correspondence: 13=OriginOS3, 14=OriginOS4, 15=OriginOS5
-        final int ANDROID_VER = 16;
+        int ANDROID_VER = Integer.parseInt(System.getProperty("ANDROID_VER", "16"));
         // ---------------------
 
-        final String SNP = "A0000000000000A";
-        final String HW_VER = MODEL_SW_VER + "MA";
+        // Serial Number
+        String SNP = System.getProperty("SNP", "A0000000000000A");
 
         // Full Package / Delta-ota Package
-        final boolean IS_FULL = true;
+        boolean IS_FULL = Boolean.parseBoolean(System.getProperty("IS_FULL", "true"));
 
         // Verbose for check raw
-        final boolean verbose = false;
+        boolean verbose = Boolean.parseBoolean(System.getProperty("VERBOSE", "false"));
 
+        final String HW_VER = MODEL_SW_VER + "MA";
+        String FULL_SW_VERSION = SW_VERSION.contains(".W") ? SW_VERSION + ".V000L1" : SW_VERSION;
         String FULL_VER = SW_VERSION.contains(".W") ? MODEL_SW_VER + "_A_" + SW_VERSION + ".V000L1" : MODEL_SW_VER + "_A_" + SW_VERSION;
         String VERSION_LONG = SW_VERSION.contains(".W") ? MODEL_SW_VER + "_N_" + MODEL_SW_VER + "MA_" + SW_VERSION + ".V000L1" : MODEL_SW_VER + "_N_" + MODEL_SW_VER + "MA_" + SW_VERSION;
 
@@ -474,48 +493,102 @@ public class VivoOtaTracker extends AbstractJni {
         int elapsedtime = isPhone ? 140000 + new Random().nextInt(80000) : 2000000 + new Random().nextInt(500000);
         int isFull = IS_FULL ? 1 : 0;
 
-        String rawParams;
+        LinkedHashMap<String, Object> p = new LinkedHashMap<>();
 
+        // Common Raw
+        p.put("vgcNewActiveVer", "");
+        p.put("nt", "WIFI");
+        p.put("vgcSwVer", "1.1.1");
+        p.put("fullVer", FULL_VER);
+        p.put("emmcid", "");
+        p.put("sm1", "null");
+        p.put("sm2", "null");
+        p.put("model", MODEL_SW_VER);
+        p.put("hasVgc", 1);
+        p.put("vgcNewPassiveVer", "");
+        p.put("ch", "N");
+        p.put("gn", 0);
+        p.put("newActiveVer", "");
+        p.put("version", VERSION_LONG);
+        p.put("st2", 0);
+        p.put("cu", "N");
+        p.put("srm2", 0);
+        p.put("srm1", 0);
+        p.put("cy", "CN-ZH");
+        p.put("sn2", "null");
+        p.put("ne", "null");
+        p.put("sn1", "null");
+        p.put("public_model", DEVICE_MODEL);
+        p.put("newPassiveVer", "");
+        p.put("hwVer", HW_VER);
+        p.put("swVer", FULL_SW_VERSION);
+        p.put("language", "zh_CN");
+        p.put("isMan", 1);
+        p.put("isFull", isFull);
+        p.put("protocalversion", "1.0");
+        p.put("checkTrige", "MANUL");
+        p.put("isstlifeover", "false");
+        p.put("hwFingerprint", "");
+
+        // Speecific Raw
         if (isPhone) {
-            rawParams = "vgcNewActiveVer=&nt=WIFI&vgcSwVer=1.1.1&vgcCu=V000&fullVer=" + FULL_VER + "&sf=1&emmcid=&si=null&sm1=null&dType=phone&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&s_n=null&ch=N&gn=0&newActiveVer=&elapsedtime=" + elapsedtime + "&version=" + VERSION_LONG + "&st2=0&st1=" + (100000 + new Random().nextInt(60000)) + "&cu=N&srm2=0&srm1=0&cy=CN-ZH&sn2=null&ne=null&sn1=null&imei=000000000000000&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + "&language=zh_CN&ms=0&mtype=no&radiotype=L&isMan=1&isFull=" + isFull + "&protocalversion=1.0&checkTrige=MANUL&isstlifeover=false&hwFingerprint=";
+            p.put("vgcCu", "V000");
+            p.put("sf", 1);
+            p.put("si", "null");
+            p.put("dType", "phone");
+            p.put("s_n", "null");
+            p.put("elapsedtime", elapsedtime);
+            p.put("st1", 100000 + new Random().nextInt(60000));
+            p.put("imei", "000000000000000");
+            p.put("ms", 0);
+            p.put("mtype", "no");
+            p.put("radiotype", "L");
         } else {
-            rawParams = "vgcNewActiveVer=&romVersion=Funtouch+" + ANDROID_VER + ".0&nt=WIFI&occurTime=" + ts + "&vgcSwVer=1.0.1&vgcCu=NULL&battery=69&fullVer=" + FULL_VER + "&sf=0&emmcid=&si=&oem=" + MODEL_SW_VER + "_CN-ZH_FULL_SC_NULL&sm1=null&dType=tablet&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&ch=N&gn=0&oemProjects=" + String.join("+", MODEL_SW_VER, MODEL_SW_VER + "B") + "&newActiveVer=&verName=1.1.1.1&elapsedtime=" + elapsedtime + "&version=" + VERSION_LONG + "&verCode=000000001&st2=0&st1=0&cu=N&srm2=0&snp=" + SNP + "&srm1=0&cy=CN-ZH&sn2=null&ne=&sn1=null&imei=&sdkVersion=34&isCharge=false&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + "&language=zh_CN&ms=-1&mtype=FULL_SC&radiotype=A&isMan=1&isFull=" + isFull + "&protocalversion=1.0&checkTrige=MANUL&isstlifeover=false&hwFingerprint=";
+            p.put("romVersion", "Funtouch " + ANDROID_VER + ".0");
+            p.put("occurTime", ts);
+            p.put("vgcCu", "NULL");
+            p.put("battery", 69);
+            p.put("sf", 0);
+            p.put("si", "");
+            p.put("oem", MODEL_SW_VER + "_CN-ZH_FULL_SC_NULL");
+            p.put("dType", "tablet");
+            p.put("oemProjects", MODEL_SW_VER + "+" + MODEL_SW_VER + "B");
+            p.put("verName", "1.1.1.1");
+            p.put("elapsedtime", elapsedtime);
+            p.put("verCode", "000000001");
+            p.put("st1", 0);
+            p.put("snp", SNP);
+            p.put("imei", "");
+            p.put("sdkVersion", 34);
+            p.put("isCharge", "false");
+            p.put("ms", -1);
+            p.put("mtype", "FULL_SC");
+            p.put("radiotype", "A");
         }
+
+        String rawParams = joinParams(p);
 
         System.out.println("  Device: " + DEVICE_TYPE + " | " + DEVICE_MODEL + " / " + MODEL_SW_VER);
         System.out.println("  Base Version: " + SW_VERSION);
         if (verbose) System.out.println("  Raw Request Params: " + rawParams);
 
         String result = tracker.sendFreshEncryptedRequest(rawParams);
-        if (verbose) System.out.println("  Raw Update Response: " + result);
+        if (verbose) System.out.println("\n  Raw Update Response: " + result);
         printDownloadInfo(result);
 
         String pkUrl = tracker.extractPkUrl(result);
         if (pkUrl != null) {
             try {
-                String pkNameValue = "";
-                int nameStart = pkUrl.indexOf("name=");
-                if (nameStart >= 0) {
-                    pkNameValue = pkUrl.substring(nameStart + 5);
-                    int ampIdx = pkNameValue.indexOf('&');
-                    if (ampIdx > 0) pkNameValue = pkNameValue.substring(0, ampIdx);
-                }
-
-                String newTs = new SimpleDateFormat("yy_MM_dd-HH_mm_ss").format(new Date());
-                String nonce = UUID.randomUUID().toString().replace("-", "");
-                long timestamp = System.currentTimeMillis();
-                int newElapsed = isPhone ? 140000 + new Random().nextInt(80000) : 2000000 + new Random().nextInt(500000);
-                int timeToUptouch = isPhone ? 900000 + new Random().nextInt(100000) : 1700000 + new Random().nextInt(100000);
-
-                String redirPlaintext;
-                if (isPhone) {
-                    redirPlaintext = "vgcNewActiveVer=&nt=WIFI&vgcSwVer=1.1.1&vgcCu=V000&fullVer=" + FULL_VER + "&sf=1&emmcid=&si=null&sm1=null&dType=phone&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&s_n=null&ch=N&gn=0&newActiveVer=&elapsedtime=" + newElapsed + "&version=" + VERSION_LONG + "&st2=0&st1=" + (100000 + new Random().nextInt(60000)) + "&cu=N&srm2=0&srm1=0&cy=CN-ZH&sn2=null&ne=null&sn1=null&imei=null&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + "&language=zh_CN&ms=0&mtype=no&radiotype=L&name=" + pkNameValue + "&fileType=relative&fileLength=" + extractJsonStr(result, "pkLen\":\"") + "&packageType=patch&upversion=&dlrequest=0&downloadType=NORMAL_MANUAL_DOWNLOAD&isPacakgeActive=1&timeToUptouch=" + timeToUptouch + "&httpsSupport=1&isTrialVersion=false&retry=0&timeStamp=" + timestamp + "&nonce=" + nonce + "&hwFingerprint=";
+                int queryStart = pkUrl.indexOf("?");
+                String redirParams = queryStart >= 0 ? pkUrl.substring(queryStart + 1) : pkUrl;
+                String redirRes = tracker.requestRedirPost(redirParams);
+                if (verbose) System.out.println("  Raw Redir Response: " + redirRes);
+                if (redirRes != null && redirRes.contains("\"data\":\"")) {
+                    String finalUrl = redirRes.substring(redirRes.indexOf("\"data\":\"") + 8, redirRes.indexOf("\"", redirRes.indexOf("\"data\":\"") + 8));
+                    System.out.println("  Download URL: " + normalizeJsonUrl(finalUrl));
                 } else {
-                    redirPlaintext = "vgcNewActiveVer=&romVersion=Funtouch+" + ANDROID_VER + ".0&nt=WIFI&occurTime=" + newTs + "&vgcSwVer=1.0.1&vgcCu=NULL&battery=69&fullVer=" + FULL_VER + "&sf=0&emmcid=&si=&oem=" + MODEL_SW_VER + "_CN-ZH_FULL_SC_NULL&sm1=null&dType=tablet&sm2=null&model=" + MODEL_SW_VER + "&hasVgc=1&vgcNewPassiveVer=&ch=N&gn=0&oemProjects=" + String.join("+", MODEL_SW_VER, MODEL_SW_VER + "B") + "&newActiveVer=&verName1.1.1.1&elapsedtime=" + newElapsed + "&version=" + VERSION_LONG + "&verCode=000000001&st2=0&st1=0&cu=N&srm2=0&snp=" + SNP + "&srm1=0&cy=CN-ZH&sn2=null&ne=&sn1=null&imei=&sdkVersion=34&isCharge=false&public_model=" + DEVICE_MODEL + "&newPassiveVer=&hwVer=" + HW_VER + "&swVer=" + SW_VERSION + "&language=zh_CN&ms=-1&mtype=FULL_SC&radiotype=A&name=" + pkNameValue + "&fileType=relative&fileLength=" + extractJsonStr(result, "pkLen\":\"") + "&packageType=patch&upversion=&dlrequest=0&downloadType=NORMAL_MANUAL_DOWNLOAD&isPacakgeActive=1&timeToUptouch=" + timeToUptouch + "&httpsSupport=1&isTrialVersion=false&retry=0&timeStamp=" + timestamp + "&nonce=" + nonce + "&hwFingerprint=";
+                    System.out.println("  [!] Could not parse Download URL from Redir response: " + redirRes);
                 }
-                String redirResult = tracker.requestRedirPost(redirPlaintext);
-                if (verbose) System.out.println("  redir Response: " + redirResult);
-                System.out.println("  Download URL: " + extractJsonStr(redirResult, "data\":\""));
             } catch (Exception e) {
                 System.out.println("  [!] redirPost.do request failed.");
             }
