@@ -115,6 +115,27 @@ jobs:
           chmod +x mvnw
           ./mvnw clean install -DskipTests -Dgpg.skip=true
 
+      - name: Diagnose where unicorn_java native resource actually lives
+        working-directory: unidbg
+        run: |
+          echo "== 1. 源码树里直接搜 unicorn_java / libunicorn =="
+          find . -iname "*unicorn_java*" -o -iname "*libunicorn*" 2>/dev/null || true
+
+          echo ""
+          echo "== 2. 本地 Maven 仓库(~/.m2)里搜 unicorn 相关 jar =="
+          find ~/.m2/repository -iname "*unicorn*" 2>/dev/null || true
+
+          echo ""
+          echo "== 3. 检查这些 jar 内部是否真的打包了 native 资源(.so/.dll/.dylib) =="
+          find ~/.m2/repository -iname "*unicorn*.jar" 2>/dev/null | while read -r jar; do
+            echo "--- $jar ---"
+            unzip -l "$jar" 2>/dev/null | grep -iE "\.so$|\.dll$|\.dylib$|native" || echo "  (jar内未找到匹配的native资源)"
+          done
+
+          echo ""
+          echo "== 4. unidbg-android 依赖树里 unicorn 相关依赖的 scope =="
+          ./mvnw -q -pl unidbg-android dependency:tree -Dincludes=*unicorn* 2>&1 || true
+
       - name: Run VivoOtaTracker
         working-directory: unidbg
         env:
@@ -132,6 +153,9 @@ jobs:
           MAVEN_OPTS: "-Djava.library.path=${{ env.LIB_DIRS }}"
         run: |
           ARGS="-Dexec.mainClass=com.vivo.ota.VivoOtaTracker"
+          # 尝试性修复: 打包 unicorn native 资源的依赖可能只在 test scope，
+          # exec:java 默认classpath不含test，这里强制带上test scope试一次。
+          ARGS="$ARGS -Dexec.classpathScope=test"
           ARGS="$ARGS -DDEVICE_TYPE=${DEVICE_TYPE:-phone}"
           ARGS="$ARGS -DMODEL_SW_VER=${MODEL_SW_VER}"
           ARGS="$ARGS -DDEVICE_MODEL=${DEVICE_MODEL}"
