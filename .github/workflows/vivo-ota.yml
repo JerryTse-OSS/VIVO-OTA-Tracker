@@ -109,32 +109,37 @@ jobs:
           cp tracker-src/VivoOtaTracker.java unidbg/unidbg-android/src/main/java/com/vivo/ota/
           cp tracker-src/libvivoseckey_n4.so unidbg/libs/
 
+      # 1. 把 unidbg-unicorn2 从 test 提升为 compile，保证 classpath 有 native
+      - name: Make unicorn2 a compile dependency
+        working-directory: unidbg
+        run: |
+          # 把 unidbg-android/pom.xml 里 unicorn2 的 scope 从 test 改成 compile
+          sed -i 's|<artifactId>unidbg-unicorn2</artifactId>\s*<version>\( {project.version}</version>\s*<scope>test</scope>|<artifactId>unidbg-unicorn2</artifactId>\n            <version> \){project.version}</version>\n            <scope>compile</scope>|' \
+            unidbg-android/pom.xml || true
+          # 保险起见再确认一次
+          grep -A5 'unidbg-unicorn2' unidbg-android/pom.xml
+
+      # 2. 修改 VivoOtaTracker 使用 Unicorn2Factory（最关键）
+      - name: Switch to Unicorn2 backend
+        working-directory: unidbg
+        run: |
+          # 在 import 区加上 Unicorn2Factory
+          sed -i '/import com.github.unidbg.linux.android.AndroidEmulatorBuilder;/a\
+            import com.github.unidbg.arm.backend.Unicorn2Factory;' \
+            unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java
+
+          # 把默认 build() 改成带 Unicorn2Factory 的版本
+          sed -i 's|emulator = AndroidEmulatorBuilder.for64Bit().setProcessName("com.bbk.updater").build();|emulator = AndroidEmulatorBuilder.for64Bit()\n                .setProcessName("com.bbk.updater")\n                .addBackendFactory(new Unicorn2Factory(true))\n                .build();|' \
+            unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java
+
+          # 验证修改
+          grep -A5 'AndroidEmulatorBuilder.for64Bit' unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java
+
       - name: Build unidbg (skip tests & gpg sign)
         working-directory: unidbg
         run: |
           chmod +x mvnw
           ./mvnw clean install -DskipTests -Dgpg.skip=true
-
-      - name: Diagnose where unicorn_java native resource actually lives
-        working-directory: unidbg
-        run: |
-          echo "== 1. 源码树里直接搜 unicorn_java / libunicorn =="
-          find . -iname "*unicorn_java*" -o -iname "*libunicorn*" 2>/dev/null || true
-
-          echo ""
-          echo "== 2. 本地 Maven 仓库(~/.m2)里搜 unicorn 相关 jar =="
-          find ~/.m2/repository -iname "*unicorn*" 2>/dev/null || true
-
-          echo ""
-          echo "== 3. 检查这些 jar 内部是否真的打包了 native 资源(.so/.dll/.dylib) =="
-          find ~/.m2/repository -iname "*unicorn*.jar" 2>/dev/null | while read -r jar; do
-            echo "--- $jar ---"
-            unzip -l "$jar" 2>/dev/null | grep -iE "\.so$|\.dll$|\.dylib$|native" || echo "  (jar内未找到匹配的native资源)"
-          done
-
-          echo ""
-          echo "== 4. unidbg-android 依赖树里 unicorn 相关依赖的 scope =="
-          ./mvnw -q -pl unidbg-android dependency:tree -Dincludes=*unicorn* 2>&1 || true
 
       - name: Run VivoOtaTracker
         working-directory: unidbg
@@ -147,27 +152,20 @@ jobs:
           IS_FULL: ${{ github.event.inputs.is_full }}
           SNP: ${{ github.event.inputs.snp }}
           VERBOSE: ${{ github.event.inputs.verbose }}
-          # 前面 "Collect native library directories" 步骤收集到的目录，
-          # 兜底：万一 UnsatisfiedLinkError 是因为 java.library.path
-          # 里压根没包含 .so 所在目录（而不是文件本身缺失/损坏）。
-          MAVEN_OPTS: "-Djava.library.path=${{ env.LIB_DIRS }}"
         run: |
           ARGS="-Dexec.mainClass=com.vivo.ota.VivoOtaTracker"
-          # 尝试性修复: 打包 unicorn native 资源的依赖可能只在 test scope，
-          # exec:java 默认classpath不含test，这里强制带上test scope试一次。
-          ARGS="$ARGS -Dexec.classpathScope=test"
-          ARGS="$ARGS -DDEVICE_TYPE=${DEVICE_TYPE:-phone}"
-          ARGS="$ARGS -DMODEL_SW_VER=${MODEL_SW_VER}"
-          ARGS="$ARGS -DDEVICE_MODEL=${DEVICE_MODEL}"
-          ARGS="$ARGS -DSW_VERSION=${SW_VERSION}"
-          [ -n "$ANDROID_VER" ] && ARGS="$ARGS -DANDROID_VER=${ANDROID_VER}"
-          [ -n "$IS_FULL" ] && ARGS="$ARGS -DIS_FULL=${IS_FULL}"
-          [ -n "$SNP" ] && ARGS="$ARGS -DSNP=${SNP}"
-          [ -n "$VERBOSE" ] && ARGS="$ARGS -DVERBOSE=${VERBOSE}"
+          # 不再需要强制 test classpath，也不再依赖旧的 java.library.path 兜底
+          ARGS="\( ARGS -DDEVICE_TYPE= \){DEVICE_TYPE:-phone}"
+          ARGS="\( ARGS -DMODEL_SW_VER= \){MODEL_SW_VER}"
+          ARGS="\( ARGS -DDEVICE_MODEL= \){DEVICE_MODEL}"
+          ARGS="\( ARGS -DSW_VERSION= \){SW_VERSION}"
+          [ -n "$ANDROID_VER" ] && ARGS="\( ARGS -DANDROID_VER= \){ANDROID_VER}"
+          [ -n "$IS_FULL" ] && ARGS="\( ARGS -DIS_FULL= \){IS_FULL}"
+          [ -n "$SNP" ] && ARGS="\( ARGS -DSNP= \){SNP}"
+          [ -n "$VERBOSE" ] && ARGS="\( ARGS -DVERBOSE= \){VERBOSE}"
 
-          echo "MAVEN_OPTS=${MAVEN_OPTS}"
           echo "Running: ./mvnw exec:java -pl unidbg-android $ARGS"
-          ./mvnw exec:java -pl unidbg-android $ARGS 2>&1 | tee "${GITHUB_WORKSPACE}/tracker_output.log"
+          ./mvnw exec:java -pl unidbg-android \( ARGS 2>&1 | tee " \){GITHUB_WORKSPACE}/tracker_output.log"
 
       - name: Write job summary
         if: always()
