@@ -1,0 +1,116 @@
+name: vivo-ota-tracker
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_type:
+        description: "phone 或 tablet"
+        required: false
+        default: "phone"
+      model_sw_ver:
+        description: "工程型号 PD号，如 PD2545"
+        required: true
+      device_model:
+        description: "入网型号 V号，如 V2545A"
+        required: true
+      sw_version:
+        description: "已知的基础系统版本号，如 16.1.16.5.W10"
+        required: true
+      android_ver:
+        description: "Android/OriginOS 大版本号 (可选)"
+        required: false
+        default: ""
+      is_full:
+        description: "true=全量包 false=增量包 (留空则按机型类型走默认值)"
+        required: false
+        default: ""
+      snp:
+        description: "设备序列号占位 (可选)"
+        required: false
+        default: ""
+      verbose:
+        description: "是否打印详细调试信息"
+        required: false
+        default: "true"
+
+jobs:
+  fetch-ota:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork (VivoOtaTracker.java + libvivoseckey_n4.so)
+        uses: actions/checkout@v4
+        with:
+          path: tracker-src
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-m2-unidbg-${{ hashFiles('unidbg/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2-unidbg-
+
+      - name: Clone unidbg framework
+        run: git clone --depth 1 https://github.com/zhkl0228/unidbg.git
+
+      - name: Place tool source & native lib into unidbg
+        run: |
+          mkdir -p unidbg/unidbg-android/src/main/java/com/vivo/ota
+          mkdir -p unidbg/libs
+          cp tracker-src/VivoOtaTracker.java unidbg/unidbg-android/src/main/java/com/vivo/ota/
+          cp tracker-src/libvivoseckey_n4.so unidbg/libs/
+
+      - name: Build unidbg (skip tests & gpg sign)
+        working-directory: unidbg
+        run: |
+          chmod +x mvnw
+          ./mvnw clean install -DskipTests -Dgpg.skip=true
+
+      - name: Run VivoOtaTracker
+        working-directory: unidbg
+        env:
+          DEVICE_TYPE: ${{ github.event.inputs.device_type }}
+          MODEL_SW_VER: ${{ github.event.inputs.model_sw_ver }}
+          DEVICE_MODEL: ${{ github.event.inputs.device_model }}
+          SW_VERSION: ${{ github.event.inputs.sw_version }}
+          ANDROID_VER: ${{ github.event.inputs.android_ver }}
+          IS_FULL: ${{ github.event.inputs.is_full }}
+          SNP: ${{ github.event.inputs.snp }}
+          VERBOSE: ${{ github.event.inputs.verbose }}
+        run: |
+          ARGS="-Dexec.mainClass=com.vivo.ota.VivoOtaTracker"
+          ARGS="$ARGS -DDEVICE_TYPE=${DEVICE_TYPE:-phone}"
+          ARGS="$ARGS -DMODEL_SW_VER=${MODEL_SW_VER}"
+          ARGS="$ARGS -DDEVICE_MODEL=${DEVICE_MODEL}"
+          ARGS="$ARGS -DSW_VERSION=${SW_VERSION}"
+          [ -n "$ANDROID_VER" ] && ARGS="$ARGS -DANDROID_VER=${ANDROID_VER}"
+          [ -n "$IS_FULL" ] && ARGS="$ARGS -DIS_FULL=${IS_FULL}"
+          [ -n "$SNP" ] && ARGS="$ARGS -DSNP=${SNP}"
+          [ -n "$VERBOSE" ] && ARGS="$ARGS -DVERBOSE=${VERBOSE}"
+
+          echo "Running: ./mvnw exec:java -pl unidbg-android $ARGS"
+          ./mvnw exec:java -pl unidbg-android $ARGS 2>&1 | tee "${GITHUB_WORKSPACE}/tracker_output.log"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## vivo OTA Tracker 输出"
+            echo '```'
+            tail -n 150 "${GITHUB_WORKSPACE}/tracker_output.log" 2>/dev/null || echo "(no log captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vivo-ota-result-${{ github.run_number }}
+          path: tracker_output.log
+          retention-days: 7
