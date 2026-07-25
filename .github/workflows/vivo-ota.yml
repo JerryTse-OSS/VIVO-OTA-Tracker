@@ -57,6 +57,12 @@ jobs:
             ${{ runner.os }}-m2-unidbg-
 
       - name: Clone unidbg framework
+        env:
+          # unidbg-ios 模块下的测试资源(ipa文件)走git-lfs，
+          # 上游仓库自己的LFS配额经常被薅爆，我们只需要
+          # unidbg-android + 核心模块，跳过LFS smudge即可，
+          # 不影响构建(那些文件只是iOS模块的测试资源)。
+          GIT_LFS_SKIP_SMUDGE: "1"
         run: git clone --depth 1 https://github.com/zhkl0228/unidbg.git
 
       - name: Place tool source & native lib into unidbg
