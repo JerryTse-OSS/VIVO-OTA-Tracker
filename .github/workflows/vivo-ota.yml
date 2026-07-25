@@ -51,56 +51,15 @@ jobs:
       - name: Cache Maven repository
         uses: actions/cache@v4
         with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-m2-unidbg-${{ hashFiles('unidbg/pom.xml') }}
+          path: \~/.m2/repository
+          key: \( {{ runner.os }}-m2-unidbg- \){{ hashFiles('unidbg/pom.xml') }}
           restore-keys: |
             ${{ runner.os }}-m2-unidbg-
 
       - name: Clone unidbg framework
         env:
-          # unidbg-ios 模块下的测试资源(ipa文件)走git-lfs，
-          # 上游仓库自己的LFS配额经常被薅爆，我们只需要
-          # unidbg-android + 核心模块，跳过LFS smudge即可，
-          # 不影响构建(那些文件只是iOS模块的测试资源)。
           GIT_LFS_SKIP_SMUDGE: "1"
         run: git clone --depth 1 https://github.com/zhkl0228/unidbg.git
-
-      - name: Diagnose native .so files (check for LFS pointer stubs)
-        working-directory: unidbg
-        run: |
-          echo "== 扫描仓库内所有 .so 文件 =="
-          FOUND_STUB=0
-          while IFS= read -r f; do
-            size=$(stat -c%s "$f" 2>/dev/null || echo 0)
-            if [ "$size" -lt 1000 ]; then
-              echo "⚠️  疑似LFS指针文件 (体积仅 ${size} bytes): $f"
-              echo "    内容预览: $(head -c 120 "$f" | tr -d '\n')"
-              FOUND_STUB=1
-            else
-              echo "✅ 正常二进制 (${size} bytes): $f"
-            fi
-          done < <(find . -iname "*.so" -type f)
-          echo "FOUND_STUB=${FOUND_STUB}" >> "$GITHUB_ENV"
-
-      - name: Re-pull real native libs via git-lfs (skip huge iOS test assets)
-        working-directory: unidbg
-        if: env.FOUND_STUB == '1'
-        run: |
-          echo "检测到LFS指针stub，尝试只拉取 .so/.dll/.dylib，排除 unidbg-ios 测试资源..."
-          git lfs pull \
-            --include="**/*.so,**/*.dll,**/*.dylib" \
-            --exclude="unidbg-ios/src/test/resources/**" \
-          || echo "git lfs pull 失败(很可能是仓库级LFS配额本身就打满了，不分文件)，继续往下走，构建阶段会再次暴露问题"
-
-          echo "== 重新检查 .so 体积 =="
-          find . -iname "*.so" -type f -exec stat -c "%s %n" {} \;
-
-      - name: Collect native library directories for java.library.path
-        working-directory: unidbg
-        run: |
-          LIB_DIRS=$(find . -iname "*.so" -exec dirname {} \; | sort -u | sed 's#^\./##' | while read -r d; do echo "${GITHUB_WORKSPACE}/unidbg/${d}"; done | paste -sd ":")
-          echo "LIB_DIRS=${LIB_DIRS}" >> "$GITHUB_ENV"
-          echo "收集到的 native 库目录: ${LIB_DIRS}"
 
       - name: Place tool source & native lib into unidbg
         run: |
@@ -109,31 +68,69 @@ jobs:
           cp tracker-src/VivoOtaTracker.java unidbg/unidbg-android/src/main/java/com/vivo/ota/
           cp tracker-src/libvivoseckey_n4.so unidbg/libs/
 
-      # 1. 把 unidbg-unicorn2 从 test 提升为 compile，保证 classpath 有 native
-      - name: Make unicorn2 a compile dependency
+      - name: Force unicorn2 to compile scope
         working-directory: unidbg
         run: |
-          # 把 unidbg-android/pom.xml 里 unicorn2 的 scope 从 test 改成 compile
-          sed -i 's|<artifactId>unidbg-unicorn2</artifactId>\s*<version>\( {project.version}</version>\s*<scope>test</scope>|<artifactId>unidbg-unicorn2</artifactId>\n            <version> \){project.version}</version>\n            <scope>compile</scope>|' \
-            unidbg-android/pom.xml || true
-          # 保险起见再确认一次
-          grep -A5 'unidbg-unicorn2' unidbg-android/pom.xml
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("unidbg-android/pom.xml")
+          text = p.read_text()
+          # 只删掉 unidbg-unicorn2 依赖块里的 <scope>test</scope>
+          text2, n = re.subn(
+              r'(<artifactId>unidbg-unicorn2</artifactId>\s*<version>\$\{project\.version\}</version>)\s*<scope>test</scope>',
+              r'\1',
+              text,
+              count=1
+          )
+          if n == 0:
+              raise SystemExit("unidbg-unicorn2 test scope not found")
+          p.write_text(text2)
+          print("removed <scope>test</scope> for unidbg-unicorn2")
+          PY
+          grep -A8 'unidbg-unicorn2' unidbg-android/pom.xml
 
-      # 2. 修改 VivoOtaTracker 使用 Unicorn2Factory（最关键）
-      - name: Switch to Unicorn2 backend
+      - name: Switch VivoOtaTracker to Unicorn2 backend
         working-directory: unidbg
         run: |
-          # 在 import 区加上 Unicorn2Factory
-          sed -i '/import com.github.unidbg.linux.android.AndroidEmulatorBuilder;/a\
-            import com.github.unidbg.arm.backend.Unicorn2Factory;' \
-            unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-          # 把默认 build() 改成带 Unicorn2Factory 的版本
-          sed -i 's|emulator = AndroidEmulatorBuilder.for64Bit().setProcessName("com.bbk.updater").build();|emulator = AndroidEmulatorBuilder.for64Bit()\n                .setProcessName("com.bbk.updater")\n                .addBackendFactory(new Unicorn2Factory(true))\n                .build();|' \
-            unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java
+          p = Path("unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java")
+          text = p.read_text()
 
-          # 验证修改
-          grep -A5 'AndroidEmulatorBuilder.for64Bit' unidbg-android/src/main/java/com/vivo/ota/VivoOtaTracker.java
+          # 1. 确保 import 存在（插在 AndroidEmulatorBuilder 那行后面）
+          if "Unicorn2Factory" not in text:
+              text = text.replace(
+                  "import com.github.unidbg.linux.android.AndroidEmulatorBuilder;",
+                  "import com.github.unidbg.linux.android.AndroidEmulatorBuilder;\n"
+                  "import com.github.unidbg.arm.backend.Unicorn2Factory;",
+                  1
+              )
+
+          # 2. 统一替换构造函数里的 emulator 初始化
+          text = re.sub(
+              r'emulator\s*=\s*AndroidEmulatorBuilder\.for64Bit\(\)[\s\S]*?\.build\(\);',
+              'emulator = AndroidEmulatorBuilder.for64Bit()\n'
+              '                .setProcessName("com.bbk.updater")\n'
+              '                .addBackendFactory(new Unicorn2Factory(true))\n'
+              '                .build();',
+              text,
+              count=1
+          )
+
+          p.write_text(text)
+          print("VivoOtaTracker updated successfully")
+          print("--- import ---")
+          for i, line in enumerate(text.splitlines(), 1):
+              if "Unicorn2Factory" in line or "AndroidEmulatorBuilder" in line:
+                  print(f"{i}: {line}")
+          print("--- constructor ---")
+          for i, line in enumerate(text.splitlines(), 1):
+              if "for64Bit" in line or "Unicorn2Factory(true)" in line or "setProcessName" in line:
+                  print(f"{i}: {line}")
+          PY
 
       - name: Build unidbg (skip tests & gpg sign)
         working-directory: unidbg
@@ -154,7 +151,6 @@ jobs:
           VERBOSE: ${{ github.event.inputs.verbose }}
         run: |
           ARGS="-Dexec.mainClass=com.vivo.ota.VivoOtaTracker"
-          # 不再需要强制 test classpath，也不再依赖旧的 java.library.path 兜底
           ARGS="\( ARGS -DDEVICE_TYPE= \){DEVICE_TYPE:-phone}"
           ARGS="\( ARGS -DMODEL_SW_VER= \){MODEL_SW_VER}"
           ARGS="\( ARGS -DDEVICE_MODEL= \){DEVICE_MODEL}"
