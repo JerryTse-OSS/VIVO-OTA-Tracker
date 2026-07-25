@@ -150,19 +150,22 @@ jobs:
           SNP: ${{ github.event.inputs.snp }}
           VERBOSE: ${{ github.event.inputs.verbose }}
         run: |
-          ARGS="-Dexec.mainClass=com.vivo.ota.VivoOtaTracker"
-          ARGS="\( ARGS -DDEVICE_TYPE= \){DEVICE_TYPE:-phone}"
-          ARGS="\( ARGS -DMODEL_SW_VER= \){MODEL_SW_VER}"
-          ARGS="\( ARGS -DDEVICE_MODEL= \){DEVICE_MODEL}"
-          ARGS="\( ARGS -DSW_VERSION= \){SW_VERSION}"
-          [ -n "$ANDROID_VER" ] && ARGS="\( ARGS -DANDROID_VER= \){ANDROID_VER}"
-          [ -n "$IS_FULL" ] && ARGS="\( ARGS -DIS_FULL= \){IS_FULL}"
-          [ -n "$SNP" ] && ARGS="\( ARGS -DSNP= \){SNP}"
-          [ -n "$VERBOSE" ] && ARGS="\( ARGS -DVERBOSE= \){VERBOSE}"
+          set -e
+          CMD=(./mvnw exec:java -pl unidbg-android
+            -Dexec.mainClass=com.vivo.ota.VivoOtaTracker
+            -DDEVICE_TYPE="${DEVICE_TYPE:-phone}"
+            -DMODEL_SW_VER="${MODEL_SW_VER}"
+            -DDEVICE_MODEL="${DEVICE_MODEL}"
+            -DSW_VERSION="${SW_VERSION}"
+          )
+          [ -n "$ANDROID_VER" ] && CMD+=(-DANDROID_VER="$ANDROID_VER")
+          [ -n "$IS_FULL" ] && CMD+=(-DIS_FULL="$IS_FULL")
+          [ -n "$SNP" ] && CMD+=(-DSNP="$SNP")
+          [ -n "$VERBOSE" ] && CMD+=(-DVERBOSE="$VERBOSE")
 
-          echo "Running: ./mvnw exec:java -pl unidbg-android $ARGS"
-          ./mvnw exec:java -pl unidbg-android \( ARGS 2>&1 | tee " \){GITHUB_WORKSPACE}/tracker_output.log"
-
+          echo "Running: ${CMD[*]}"
+          "\( {CMD[@]}" 2>&1 | tee " \){GITHUB_WORKSPACE}/tracker_output.log"
+          
       - name: Write job summary
         if: always()
         run: |
