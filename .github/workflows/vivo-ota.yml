@@ -65,6 +65,43 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: "1"
         run: git clone --depth 1 https://github.com/zhkl0228/unidbg.git
 
+      - name: Diagnose native .so files (check for LFS pointer stubs)
+        working-directory: unidbg
+        run: |
+          echo "== 扫描仓库内所有 .so 文件 =="
+          FOUND_STUB=0
+          while IFS= read -r f; do
+            size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+            if [ "$size" -lt 1000 ]; then
+              echo "⚠️  疑似LFS指针文件 (体积仅 ${size} bytes): $f"
+              echo "    内容预览: $(head -c 120 "$f" | tr -d '\n')"
+              FOUND_STUB=1
+            else
+              echo "✅ 正常二进制 (${size} bytes): $f"
+            fi
+          done < <(find . -iname "*.so" -type f)
+          echo "FOUND_STUB=${FOUND_STUB}" >> "$GITHUB_ENV"
+
+      - name: Re-pull real native libs via git-lfs (skip huge iOS test assets)
+        working-directory: unidbg
+        if: env.FOUND_STUB == '1'
+        run: |
+          echo "检测到LFS指针stub，尝试只拉取 .so/.dll/.dylib，排除 unidbg-ios 测试资源..."
+          git lfs pull \
+            --include="**/*.so,**/*.dll,**/*.dylib" \
+            --exclude="unidbg-ios/src/test/resources/**" \
+          || echo "git lfs pull 失败(很可能是仓库级LFS配额本身就打满了，不分文件)，继续往下走，构建阶段会再次暴露问题"
+
+          echo "== 重新检查 .so 体积 =="
+          find . -iname "*.so" -type f -exec stat -c "%s %n" {} \;
+
+      - name: Collect native library directories for java.library.path
+        working-directory: unidbg
+        run: |
+          LIB_DIRS=$(find . -iname "*.so" -exec dirname {} \; | sort -u | sed 's#^\./##' | while read -r d; do echo "${GITHUB_WORKSPACE}/unidbg/${d}"; done | paste -sd ":")
+          echo "LIB_DIRS=${LIB_DIRS}" >> "$GITHUB_ENV"
+          echo "收集到的 native 库目录: ${LIB_DIRS}"
+
       - name: Place tool source & native lib into unidbg
         run: |
           mkdir -p unidbg/unidbg-android/src/main/java/com/vivo/ota
@@ -89,6 +126,10 @@ jobs:
           IS_FULL: ${{ github.event.inputs.is_full }}
           SNP: ${{ github.event.inputs.snp }}
           VERBOSE: ${{ github.event.inputs.verbose }}
+          # 前面 "Collect native library directories" 步骤收集到的目录，
+          # 兜底：万一 UnsatisfiedLinkError 是因为 java.library.path
+          # 里压根没包含 .so 所在目录（而不是文件本身缺失/损坏）。
+          MAVEN_OPTS: "-Djava.library.path=${{ env.LIB_DIRS }}"
         run: |
           ARGS="-Dexec.mainClass=com.vivo.ota.VivoOtaTracker"
           ARGS="$ARGS -DDEVICE_TYPE=${DEVICE_TYPE:-phone}"
@@ -100,6 +141,7 @@ jobs:
           [ -n "$SNP" ] && ARGS="$ARGS -DSNP=${SNP}"
           [ -n "$VERBOSE" ] && ARGS="$ARGS -DVERBOSE=${VERBOSE}"
 
+          echo "MAVEN_OPTS=${MAVEN_OPTS}"
           echo "Running: ./mvnw exec:java -pl unidbg-android $ARGS"
           ./mvnw exec:java -pl unidbg-android $ARGS 2>&1 | tee "${GITHUB_WORKSPACE}/tracker_output.log"
 
