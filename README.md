@@ -71,8 +71,6 @@ The tracker reads device parameters from Java system properties, so you can quer
 | `SNP` | Serial number used in request parameters. | `A0000000000000A` |
 | `VERBOSE` | Print raw update / redir responses for debugging. | `true` |
 
-Advanced overrides are also available when a device does not follow the default `MODEL_A_VERSION` / `MODEL_N_HW_VERSION` pattern: `HW_VER`, `FULL_VER`, `VERSION`, `SW_VER`, `APP_VER_NAME`, and `APP_VER_CODE`.
-
 You may check the SW_MODEL and DEVICE_MODEL from [here](https://khwang9883.github.io/MobileModels/brands/vivo_cn.html)
 
 ---
