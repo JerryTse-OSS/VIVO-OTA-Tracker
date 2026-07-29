@@ -492,6 +492,10 @@ public class VivoOtaTracker extends AbstractJni {
 
         LinkedHashMap<String, Object> p = new LinkedHashMap<>();
 
+        Random rand = new Random();
+        StringBuilder imeiBuilder = new StringBuilder(15);
+        for (int i = 0; i < 15; i++) imeiBuilder.append(rand.nextInt(10));
+
         // Common Raw
         p.put("vgcNewActiveVer", "");
         p.put("nt", "WIFI");
@@ -536,7 +540,7 @@ public class VivoOtaTracker extends AbstractJni {
             p.put("s_n", "null");
             p.put("elapsedtime", elapsedtime);
             p.put("st1", 100000 + new Random().nextInt(60000));
-            p.put("imei", "000000000000000");
+            p.put("imei", imeiBuilder.toString());
             p.put("ms", 0);
             p.put("mtype", "no");
             p.put("radiotype", "L");
