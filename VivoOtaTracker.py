@@ -18,10 +18,11 @@ import random
 import re
 import sys
 import time
+import uuid
 import zlib
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode, quote_plus, quote
 
 import ssl
 import requests
@@ -566,12 +567,131 @@ def build_request_params(config: DeviceConfig) -> Dict[str, str]:
     return params
 
 
-def parse_update_response(response: str) -> UpdateInfo:
+def build_base_params(config: DeviceConfig) -> Dict[str, str]:
+    """
+    Build the base URL params used by redirPost.do download request.
+    Mirrors APK HttpUtils.getBaseUrl().
+
+    Args:
+        config: Device configuration
+
+    Returns:
+        Base parameter dictionary
+    """
+    is_phone = config.device_type == "phone"
+
+    # Derived values
+    hw_ver = config.model_sw_ver + "MA"
+    if ".W" in config.sw_version:
+        full_sw_version = config.sw_version + ".V000L1"
+        full_ver = f"{config.model_sw_ver}_A_{config.sw_version}.V000L1"
+        version_long = f"{config.model_sw_ver}_N_{config.model_sw_ver}MA_{config.sw_version}.V000L1"
+    else:
+        full_sw_version = config.sw_version
+        full_ver = f"{config.model_sw_ver}_A_{config.sw_version}"
+        version_long = f"{config.model_sw_ver}_N_{config.model_sw_ver}MA_{config.sw_version}"
+
+    elapsedtime = (
+        140000 + random.randint(0, 80000)
+        if is_phone
+        else 2000000 + random.randint(0, 500000)
+    )
+    imei = generate_imei()
+
+    params = {
+        "model": config.model_sw_ver,
+        "dModel": config.model_sw_ver + "A",
+        "imei": imei,
+        "s_n": "null",
+        "dType": "phone",
+        "version": version_long,
+        "public_model": config.device_model,
+        "cy": "CN-ZH",
+        "cu": "N",
+        "vgcSwVer": "1.1.1",
+        "vgcCu": "V000",
+        "hasVgc": 1,
+        "elapsedtime": elapsedtime,
+        "st1": 100000 + random.randint(0, 60000) if is_phone else 0,
+        "st2": 0,
+        "emmcid": "",
+        "fullVer": full_ver,
+        "si": "null",
+        "ne": "null",
+        "ch": "N",
+        "hwVer": hw_ver,
+        "swVer": full_sw_version,
+        "language": "zh_CN",
+        "ms": "0",
+        "mtype": "no",
+        "radiotype": "L",
+    }
+
+    if not is_phone:
+        params.update({
+            "dType": "tablet",
+            "snp": config.snp,
+            "imei": "",
+            "mtype": "FULL_SC",
+            "radiotype": "A",
+        })
+
+    return params
+
+
+def build_redir_params(config: DeviceConfig, pk_url: str, update_response: str) -> str:
+    """
+    Build the redirPost.do request params.
+    Mirrors APK HttpUtils.getDlRequestParams():
+    baseUrl + pk query + upversion/dlrequest/downloadType/timeStamp/nonce/hwFingerprint.
+
+    Args:
+        config: Device configuration
+        pk_url: Download URL from update response (pk field)
+        update_response: Full decrypted update response JSON
+
+    Returns:
+        Query string to encrypt and POST to redirPost.do
+    """
+    # baseUrl params (device info)
+    base = build_base_params(config)
+    parts = [f"{k}={quote(str(v))}" for k, v in base.items()]
+
+    # pk query string (name/fileType/fileLength/packageType)
+    query_start = pk_url.find("?")
+    if query_start >= 0:
+        parts.append(pk_url[query_start + 1:])
+
+    # upversion = target version from update response
+    target_version = extract_json_str(update_response, 'version":"')
+    if target_version != "(Not found)":
+        parts.append(f"upversion={quote(target_version)}")
+
+    # Fixed request fields
+    parts.append("dlrequest=0")
+    parts.append("downloadType=0")
+    parts.append("isPacakgeActive=1")
+    parts.append("timeToUptouch=0")
+    parts.append("httpsSupport=1")
+    parts.append("isTrialVersion=false")
+    parts.append("retry=0")
+
+    # Security fields: timeStamp from update response ext, nonce, hwFingerprint
+    time_stamp = extract_json_str(update_response, 'timeStamp"')
+    parts.append(f"timeStamp={time_stamp}" if time_stamp != "(Not found)" else "timeStamp=0")
+    parts.append(f"nonce={uuid.uuid4().hex}")
+    parts.append("hwFingerprint=")
+
+    return "&".join(parts)
+
+
+def parse_update_response(response: str, config: DeviceConfig = None) -> UpdateInfo:
     """
     Parse update response into UpdateInfo.
 
     Args:
         response: Decrypted response string
+        config: Device configuration (used for building redir params)
 
     Returns:
         Parsed UpdateInfo object
@@ -584,20 +704,20 @@ def parse_update_response(response: str) -> UpdateInfo:
     info.size_mb = parse_size(info.size) // 1048576 if info.size != "(Not found)" else 0
     info.changelog_url = extract_json_str(response, 'h5Url":"')
 
-    # Extract download URL from pk field
+    # Extract download URL from pk field via redirPost.do
     pk_url = extract_pk_url(response)
-    if pk_url:
+    if pk_url and config is not None:
         try:
-            query_start = pk_url.find("?")
-            if query_start >= 0:
-                redir_params = pk_url[query_start + 1:]
-                redir_response = request_redir_post(redir_params)
-                if '"data":"' in redir_response:
-                    data_start = redir_response.find('"data":"') + 8
-                    data_end = redir_response.find('"', data_start)
-                    info.download_url = normalize_json_url(
-                        redir_response[data_start:data_end]
-                    )
+            redir_params = build_redir_params(config, pk_url, response)
+            redir_response = request_redir_post(redir_params)
+            if '"data":"' in redir_response:
+                data_start = redir_response.find('"data":"') + 8
+                data_end = redir_response.find('"', data_start)
+                info.download_url = normalize_json_url(
+                    redir_response[data_start:data_end]
+                )
+            elif config.verbose:
+                print(f"  [!] Redir no data: {redir_response[:200]}")
         except Exception as e:
             print(f"  [!] Failed to get redirect URL: {e}")
 
@@ -668,7 +788,7 @@ def query_ota_update(config: DeviceConfig) -> Optional[UpdateInfo]:
         return None
 
     # Parse response
-    info = parse_update_response(response)
+    info = parse_update_response(response, config)
     print_update_info(info)
 
     return info
