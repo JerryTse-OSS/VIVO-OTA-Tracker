@@ -637,7 +637,10 @@ def query_ota_update(config: DeviceConfig) -> Optional[UpdateInfo]:
     if response.startswith("[Error]"):
         print(f"  {response}")
         return None
-
+    elif "210" in response:
+        print(f"\n  [!] No updates for the device")
+        return None
+    
     # Parse response
     info = parse_update_response(response, config)
     print_update_info(info)
