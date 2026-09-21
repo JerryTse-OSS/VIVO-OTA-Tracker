@@ -408,21 +408,6 @@ def extract_json_str(json_str: str, key: str) -> str:
 
     return json_str[start:end]
 
-
-def extract_pk_url(update_json: str) -> Optional[str]:
-    """
-    Extract download URL from update response.
-
-    Args:
-        update_json: Update response JSON string
-
-    Returns:
-        Download URL or None
-    """
-    pk_url = extract_json_str(update_json, 'pk":"')
-    return None if pk_url == "(Not found)" else pk_url
-
-
 def join_params(params: Dict[str, str]) -> str:
     """
     Join parameters into URL query string format.
@@ -638,53 +623,6 @@ def build_base_params(config: DeviceConfig) -> Dict[str, str]:
 
     return params
 
-
-def build_redir_params(config: DeviceConfig, pk_url: str, update_response: str) -> str:
-    """
-    Build the redirPost.do request params.
-    Mirrors APK HttpUtils.getDlRequestParams():
-    baseUrl + pk query + upversion/dlrequest/downloadType/timeStamp/nonce/hwFingerprint.
-
-    Args:
-        config: Device configuration
-        pk_url: Download URL from update response (pk field)
-        update_response: Full decrypted update response JSON
-
-    Returns:
-        Query string to encrypt and POST to redirPost.do
-    """
-    # baseUrl params (device info)
-    base = build_base_params(config)
-    parts = [f"{k}={quote(str(v))}" for k, v in base.items()]
-
-    # pk query string (name/fileType/fileLength/packageType)
-    query_start = pk_url.find("?")
-    if query_start >= 0:
-        parts.append(pk_url[query_start + 1:])
-
-    # upversion = target version from update response
-    target_version = extract_json_str(update_response, 'version":"')
-    if target_version != "(Not found)":
-        parts.append(f"upversion={quote(target_version)}")
-
-    # Fixed request fields
-    parts.append("dlrequest=0")
-    parts.append("downloadType=0")
-    parts.append("isPacakgeActive=1")
-    parts.append("timeToUptouch=0")
-    parts.append("httpsSupport=1")
-    parts.append("isTrialVersion=false")
-    parts.append("retry=0")
-
-    # Security fields: timeStamp from update response ext, nonce, hwFingerprint
-    time_stamp = extract_json_str(update_response, 'timeStamp"')
-    parts.append(f"timeStamp={time_stamp}" if time_stamp != "(Not found)" else "timeStamp=0")
-    parts.append(f"nonce={uuid.uuid4().hex}")
-    parts.append("hwFingerprint=")
-
-    return "&".join(parts)
-
-
 def parse_update_response(response: str, config: DeviceConfig = None) -> UpdateInfo:
     """
     Parse update response into UpdateInfo.
@@ -705,22 +643,7 @@ def parse_update_response(response: str, config: DeviceConfig = None) -> UpdateI
     info.changelog_url = extract_json_str(response, 'h5Url":"')
 
     # Extract download URL from pk field via redirPost.do
-    pk_url = extract_pk_url(response)
-    if pk_url and config is not None:
-        try:
-            redir_params = build_redir_params(config, pk_url, response)
-            redir_response = request_redir_post(redir_params)
-            if '"data":"' in redir_response:
-                data_start = redir_response.find('"data":"') + 8
-                data_end = redir_response.find('"', data_start)
-                info.download_url = normalize_json_url(
-                    redir_response[data_start:data_end]
-                )
-            elif config.verbose:
-                print(f"  [!] Redir no data: {redir_response[:200]}")
-        except Exception as e:
-            print(f"  [!] Failed to get redirect URL: {e}")
-
+    info.download_url = "https://sysuptxdl.vivo.com.cn/upgrade/oem/files/" + extract_json_str(response, 'pkName":"')
     return info
 
 
